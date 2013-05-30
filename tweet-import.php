@@ -21,6 +21,17 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 */
 
+
+
+add_action('deprecated_argument_run', 'dep_arg');
+function dep_arg() {
+	echo '<pre>';
+	debug_print_backtrace();
+	echo '</pre>';
+}
+
+
+
 //-- Global skinju functions
 if (!function_exists('skinju_valid_privileges_or_die')):
 function skinju_valid_privileges_or_die ($r) {if (!current_user_can($r)) wp_die ('You do not have sufficient permissions to perform the requested action.');}
@@ -53,7 +64,7 @@ function skinju_add_admin_menus()
 {
   if (function_exists('add_menu_page'))
   {
-    add_menu_page('skinju', 'skinju', 0, 'skinju', 'skinju_options_page');
+    add_menu_page('skinju', 'skinju', 'manage_options', 'skinju', 'skinju_options_page');
     do_action ('skinju_add_admin_menus');
   }
 }
@@ -102,11 +113,6 @@ register_activation_hook (__FILE__, 'tweetimport_activate');
 if (!function_exists('tweetimport_activate')):
 function tweetimport_activate()
 {
-  $role = get_role('administrator');
-  if (!$role->has_cap('manage_tweetimport'))
-  {
-    $role->add_cap('manage_tweetimport');
-  }
   add_option ('skinju_tweet_import', array('version'=>TWEETIMPORT_VERSION, 'interval'=>'hourly'), '', 'no');
   $tweetimport_options = get_option ('skinju_tweet_import');
   $tweetimport_options = array_merge (array('version'=>TWEETIMPORT_VERSION, 'interval'=>'hourly'), $tweetimport_options);
@@ -127,7 +133,7 @@ if (!has_action ('skinju_add_admin_menus', 'tweetimport_add_menu')) {add_action(
 if (!function_exists('tweetimport_add_menu')):
 function tweetimport_add_menu()
 {
-    add_submenu_page('skinju', 'Tweet Import', 'Tweet Import', 'manage_tweetimport', 'tweetimport', 'tweetimport_options');
+    add_submenu_page('skinju', 'Tweet Import', 'Tweet Import', 'manage_options', 'tweetimport', 'tweetimport_options');
 }
 endif; //tweetimport_add_menu
 
@@ -221,7 +227,7 @@ endif; //tweetimport_display_message
 if (!function_exists('tweetimport_options')):
 function tweetimport_options()
 {
-  skinju_valid_privileges_or_die ('manage_tweetimport');
+  skinju_valid_privileges_or_die ('manage_options');
 
   $tweetimport_options = get_option ('skinju_tweet_import');
 
@@ -522,9 +528,9 @@ function tweetimport_display_account_add_edit_form($mode="add", $account_details
   echo '</div>';
 
   echo '<div class="form-field form-required">';
-  echo '<label for="account_hashtags">Remove Prefixed @name</label>';
+  echo '<label for="strip_name">Remove Prefixed @name</label>';
   echo '<select name="strip_name" id="strip_name">';
-  if (!isset ($account_details['strip_name'])) $account_details['hash_tag'] = 0;
+  if (!isset ($account_details['strip_name'])) $account_details['strip_name'] = 0;
   echo '<option value="0" ' . ($account_details['strip_name']!=1?'selected="selected"':'') . '>No</option>';
   echo '<option value="1" ' . ($account_details['strip_name']==1?'selected="selected"':'') . '>Yes</option>';
   echo '</select>';
@@ -547,7 +553,7 @@ if (!function_exists('tweetimport_handle_request')):
 function tweetimport_handle_request()
 {
   if (!empty ($_GET['tweetimport_action']) || !empty ($_POST['tweetimport_action']))
-    skinju_valid_privileges_or_die ('manage_tweetimport');
+    skinju_valid_privileges_or_die ('manage_options');
 
   $tweetimport_options = get_option ('skinju_tweet_import');
   if (!empty ($_GET['tweetimport_action']))
@@ -773,7 +779,9 @@ function tweetimport_import_twitter_feed($twitter_account)
     add_post_meta ($new_post_id, 'tweetimport_date_imported', date ('Y-m-d H:i:s'), true);
     add_post_meta ($new_post_id, 'tweetimport_twitter_id', $tweet->id_str, true);
 
-    preg_match_all ('~#([A-Za-z0-9_]+)(?=\s|\Z)~', $tweet->text, $out);
+    if ($twitter_account['hash_tag'] == 1):
+      preg_match_all ('~#([A-Za-z0-9_]+)(?=\s|\Z)~', $tweet->text, $out);
+    endif;
     if ($twitter_account['add_tag']) $out[0][] = $twitter_account['add_tag'];
     wp_set_post_tags($new_post_id, implode (',', $out[0]));
   }
