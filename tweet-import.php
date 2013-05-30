@@ -89,9 +89,10 @@ endif; //skinju_options_page
 
 //-- Tweet Import Functions
 define('TWEETIMPORT_VERSION', '1.3.1');
-define('TWEETIMPORT_API_FAVORITES_URL', 'http://twitter.com/favorites/#=#USER#=#.atom');
-define('TWEETIMPORT_API_USER_TIMELINE_URL', 'http://twitter.com/statuses/user_timeline/#=#USER#=#.atom');
-define('TWEETIMPORT_API_LIST_URL', 'http://api.twitter.com/1/#=#USER#=#/lists/#=#LIST#=#/statuses.atom');
+define('TWEETIMPORT_API_FAVORITES_URL', 'http://twitter.com/favorites/<USER>.atom');
+//define('TWEETIMPORT_API_USER_TIMELINE_URL', 'http://twitter.com/statuses/user_timeline/<USER>.atom');
+define('TWEETIMPORT_API_USER_TIMELINE_URL', 'https://api.twitter.com/1/statuses/user_timeline.json?screen_name=<USER>&count=3');
+define('TWEETIMPORT_API_LIST_URL', 'http://api.twitter.com/1/<USER>/lists/<LIST>/statuses.atom');
 
 //-- add the schedule hook 
 if (!has_action ('tweet_import_scheduled_hook', 'tweetimport_import_feeds')) {add_action('tweet_import_scheduled_hook', 'tweetimport_import_feeds');}
@@ -180,29 +181,39 @@ function tweetimport_display_head_style_css()
 }
 endif; //tweetimport_display_head_style_css
 
+if (!function_exists('tweetimport_add_message')):
+function tweetimport_add_message($message)
+{
+	global $message_array;
+	$message_array[] = $message;
+}
+endif; //tweetimport_add_message
+
+if (!function_exists('tweetimport_preserve_messages')):
+function tweetimport_preserve_messages()
+{
+	global $message_array;
+	set_transient( "tweetimport_message_array", $message_array, 60 );
+}
+endif; //tweetimport_preserve_messages
+
 if (!function_exists('tweetimport_display_message')):
 function tweetimport_display_message()
 {
-  global $message;
+    global $message_array;
 
-  if (isset ($message))
-  {
-    if (is_array ($message))
-    {
-      foreach ($message as $msg)
-      {
-      echo '<div id="message" class="updated fade">';
-      echo '<p>' . $msg . '</p>';
-      echo '</div>';      
-      }
-    }
-    else
-    {
-      echo '<div id="message" class="updated fade">';
-      echo '<p>' . $message . '</p>';
-      echo '</div>';
-    }
-  }
+	$display = is_array($message_array) ? $message_array : array();
+	
+	$preserved_message_array = get_transient( "tweetimport_message_array" );
+	if (is_array($preserved_message_array)) {
+		$display = array_merge($display, $preserved_message_array);
+		delete_transient( "tweetimport_message_array" );
+	}
+    foreach ($display as $message) {
+		echo '<div id="message" class="updated fade">';
+		echo '<p>' . $message . '</p>';
+		echo '</div>';      
+	}
 }
 endif; //tweetimport_display_message
 
@@ -292,6 +303,14 @@ function tweetimport_display_global_configuration_form()
   echo '<input type="submit" class="button" name="submit" value="Update Configuration" />';
   echo '</p>';
   echo '</form>';
+
+  echo '<form name="options-tweet-import" id="options-tweet-import" method="post">';
+  echo '<input type="hidden" name="tweetimport_action" value="import_now">';
+  echo '<p class="submit">';
+  echo '<input type="submit" class="button" name="submit" value="Import Now" />';
+  echo '</p>';
+  echo '</form>';
+
   echo '</div> <!-- end form-wrap -->';
 }
 endif; //tweetimport_display_global_configuration_form
@@ -527,8 +546,6 @@ if (!has_action ('init', 'tweetimport_handle_request')) {add_action('init', 'twe
 if (!function_exists('tweetimport_handle_request')):
 function tweetimport_handle_request()
 {
-  global $message;
-
   if (!empty ($_GET['tweetimport_action']) || !empty ($_POST['tweetimport_action']))
     skinju_valid_privileges_or_die ('manage_tweetimport');
 
@@ -542,8 +559,9 @@ function tweetimport_handle_request()
         {
           $tweetimport_options['twitter_accounts'][trim($_GET['account'])]['active']=true;
           update_option ('skinju_tweet_import', $tweetimport_options);
-          $message = 'Account ' . $_GET['account'] . ' activated successfully';
+          tweetimport_add_message('Account ' . $_GET['account'] . ' activated successfully');
         }
+        tweetimport_preserve_messages();
         wp_redirect (admin_url ('/admin.php?page=tweetimport'));
         exit();
         break;
@@ -552,8 +570,9 @@ function tweetimport_handle_request()
         {
           $tweetimport_options['twitter_accounts'][trim($_GET['account'])]['active']=false;        
           update_option ('skinju_tweet_import', $tweetimport_options);
-          $message = 'Account ' . $_GET['account'] . ' deactivated successfully';
+          tweetimport_add_message('Account ' . $_GET['account'] . ' deactivated successfully');
         }
+        tweetimport_preserve_messages();
         wp_redirect (admin_url ('/admin.php?page=tweetimport'));
         exit();
         break;
@@ -562,15 +581,17 @@ function tweetimport_handle_request()
         {
           unset ($tweetimport_options['twitter_accounts'][trim($_GET['account'])]);
           update_option ('skinju_tweet_import', $tweetimport_options);
-          $message = 'Account ' . $_GET['account'] . ' deleted successfully';
+          tweetimport_add_message('Account ' . $_GET['account'] . ' deleted successfully');
         }
+        tweetimport_preserve_messages();
         wp_redirect (admin_url ('/admin.php?page=tweetimport'));
         exit();
         break;
       case 'reset_stats':
         $tweetimport_options['twitter_accounts'][trim($_GET['account'])]['imported_count']='No';        
         update_option ('skinju_tweet_import', $tweetimport_options);
-        $message = 'Account ' . $_GET['account'] . ' stats cleared successfully';
+        tweetimport_add_message('Account ' . $_GET['account'] . ' stats cleared successfully');
+        tweetimport_preserve_messages();
         wp_redirect (admin_url ('/admin.php?page=tweetimport'));
         exit();
         break;
@@ -580,15 +601,20 @@ function tweetimport_handle_request()
   {
     switch ($_POST['tweetimport_action'])
     {
+	  case 'import_now':
+		tweetimport_import_feeds();
+        tweetimport_add_message('Import completed');
+        break;
       case 'global_configuration':
         if (!empty ($_POST['tweetimport_options_schedule']))
         {
           $tweetimport_options['interval'] = $_POST['tweetimport_options_schedule'];
           update_option ('skinju_tweet_import', $tweetimport_options);
-          $message = 'Configuration saved successfully';
+          tweetimport_add_message('Configuration saved successfully');
           wp_clear_scheduled_hook('tweet_import_scheduled_hook');
           wp_schedule_event(time(), $tweetimport_options['interval'], 'tweet_import_scheduled_hook');
         }  
+        tweetimport_preserve_messages();
         wp_redirect (admin_url ('/admin.php?page=tweetimport'));
         exit();
         break;
@@ -596,21 +622,21 @@ function tweetimport_handle_request()
         $new_account_name = trim(trim(trim($_POST['account_name']), '@'));
         if (!$new_account_name)
         {
-          $message = 'Feed User or List Information cannot be blank';
+          tweetimport_add_message('Feed User or List Information cannot be blank');
           break;
         }
 
         $account_parts = explode ('/', $new_account_name);
         if (trim($_POST['account_type']) == 2 && count($account_parts) != 2) //Account is list but not well formatted
         {
-          $message = 'List information is not correct. Please make sure the list name is correct.';
+          tweetimport_add_message('List information is not correct. Please make sure the list name is correct.');
           break;
         }
 
         $new_account_name = trim($_POST['account_type']) . '-' . $new_account_name;
         if (isset ($tweetimport_options['twitter_accounts'][$new_account_name]))
         {
-          $message = 'A feed with the same name and type already exists';
+          tweetimport_add_message('A feed with the same name and type already exists');
           break;
         }
 
@@ -630,8 +656,9 @@ function tweetimport_handle_request()
         $new_account['last_checked'] = '(Never)'; 
         $tweetimport_options['twitter_accounts'][$new_account_name] = $new_account;
         update_option ('skinju_tweet_import', $tweetimport_options);
-        $message = 'Account ' . $new_account['twitter_name'] . ' created successfully';            
+        tweetimport_add_message('Account ' . $new_account['twitter_name'] . ' created successfully');
 
+        tweetimport_preserve_messages();
         wp_redirect (admin_url ('/admin.php?page=tweetimport'));
         exit();
         break;
@@ -650,6 +677,7 @@ function tweetimport_handle_request()
         $tweetimport_options['twitter_accounts'][$new_account_name] = array_merge ($tweetimport_options['twitter_accounts'][$new_account_name], $new_account);
         update_option ('skinju_tweet_import', $tweetimport_options);
 
+        tweetimport_preserve_messages();
         wp_redirect (admin_url ('/admin.php?page=tweetimport'));
         exit();
         break;
@@ -662,75 +690,75 @@ endif; //tweetimport_handle_request
 if (!function_exists('tweetimport_import_twitter_feed')):
 function tweetimport_import_twitter_feed($twitter_account)
 {
-  require_once (ABSPATH . WPINC . '/class-feed.php');
 
-  $feed = new SimplePie();
+	// Get feed URL
 
-  $account_parts = explode ('/', $twitter_account['twitter_name'], 2);
-
-
+	$account_parts = explode ('/', $twitter_account['twitter_name'], 2);
 
   if ($twitter_account['account_type'] == 1): //Account is Favorites
-    $feed->set_feed_url(str_replace('#=#USER#=#', $account_parts[0], TWEETIMPORT_API_FAVORITES_URL));
+    $feed_url = str_replace('<USER>', $account_parts[0], TWEETIMPORT_API_FAVORITES_URL);
   elseif ($twitter_account['account_type'] == 0 && count($account_parts) == 1): //User timeline
-      $feed->set_feed_url(str_replace('#=#USER#=#', $account_parts[0], TWEETIMPORT_API_USER_TIMELINE_URL));
+    $feed_url = str_replace('<USER>', $account_parts[0], TWEETIMPORT_API_USER_TIMELINE_URL);
   elseif ($twitter_account['account_type'] == 2 && count($account_parts) == 2): //Account is list
-      $feed_url = str_replace('#=#USER#=#', $account_parts[0], TWEETIMPORT_API_LIST_URL);
-      $feed_url = str_replace('#=#LIST#=#', $account_parts[1], $feed_url);
-      $feed->set_feed_url($feed_url);
+    $feed_url = str_replace('<USER>', $account_parts[0], TWEETIMPORT_API_LIST_URL);
+    $feed_url = str_replace('<LIST>', $account_parts[1], $feed_url);
   else :
-      return '<strong>ERROR: Account information not correct. Account type wrong?</strong>';
+    return '<strong>ERROR: Account information not correct. Account type wrong?</strong>';
   endif;
 
-  $feed->set_useragent('Tweet Import http://skinju.com/wordpress/tweetimport');
-  $feed->set_cache_class('WP_Feed_Cache');
-  $feed->set_file_class('WP_SimplePie_File');
-  $feed->enable_cache(true);
-  $feed->set_cache_duration (apply_filters('tweetimport_cache_duration', 880));
-  $feed->enable_order_by_date(false);
-  $feed->init();
-  $feed->handle_content_type();
+	// Get JSON data
+	
+	// Don't verify SSL certificate, as this fails from my work PC...
+	// $response = wp_remote_get( $feed_url );
+	$response = wp_remote_get( $feed_url, array( 'sslverify' => false ) );
 
-  if ($feed->error()):
-   return '<strong>ERROR: Feed Reading Error.</strong>';
-  endif;
+	// wp_die( '<pre>'. htmlentities( print_r( $response, true ) ) .'</pre>' );
+	$body = wp_remote_retrieve_body( $response );
+	$tweet_list = json_decode( $body );
 
-  $rss_items = $feed->get_items();
+	if ( $tweet_list && !empty( $response['headers']['status'] ) && $response['headers']['status'] == '200 OK' ) {
+		// all is well
+	} else {
+		return '<strong>ERROR: Feed Reading Error: ' . $response['headers']['status'] . '</strong>';
+	}
+
+	// Import
 
   $imported_count = 0;
-  foreach ($rss_items as $item)
+  foreach ($tweet_list as $tweet)
   {
-    $item = apply_filters ('tweetimport_tweet_before_new_post', $item); //return false to stop processing an item.
-    if (!$item) continue;
+    $tweet = apply_filters ('tweetimport_tweet_before_new_post', $tweet); //return false to stop processing an item.
+    if (!$tweet) continue;
 
-    $processed_description = $item->get_description();
+    $processed_text = iconv( "UTF-8", "ISO-8859-1//IGNORE", $tweet->text );
 
     //Get the twitter author from the beginning of the tweet text
-    $twitter_author = trim(preg_replace("~^(\w+):(.*?)$~", "\\1", $processed_description));
+    $twitter_author = trim(preg_replace("~^(\w+):(.*?)$~", "\\1", $processed_text));
 
     if ($twitter_account['strip_name'] == 1):
-      $processed_description = preg_replace("~^(\w+):(.*?)~i", "\\2", $processed_description);
+      $processed_text = preg_replace("~^(\w+):(.*?)~i", "\\2", $processed_text);
     endif;
 
     if ($twitter_account['names_clickable'] == 1):
-      $processed_description = preg_replace("~@(\w+)~", "<a href=\"http://www.twitter.com/\\1\" target=\"_blank\">@\\1</a>", $processed_description);
-      $processed_description = preg_replace("~^(\w+):~", "<a href=\"http://www.twitter.com/\\1\" target=\"_blank\">@\\1</a>:", $processed_description);
+      $processed_text = preg_replace("~@(\w+)~", "<a href=\"http://www.twitter.com/\\1\" target=\"_blank\">@\\1</a>", $processed_text);
+      $processed_text = preg_replace("~^(\w+):~", "<a href=\"http://www.twitter.com/\\1\" target=\"_blank\">@\\1</a>:", $processed_text);
     endif;
 
     if ($twitter_account['hashtags_clickable'] == 1):
       if ($twitter_account['hashtags_clickable_twitter'] == 1):
-          $processed_description = preg_replace("/#(\w+)/", "<a href=\"http://search.twitter.com/search?q=\\1\" target=\"_blank\">#\\1</a>", $processed_description);
+          $processed_text = preg_replace("/#(\w+)/", "<a href=\"http://search.twitter.com/search?q=\\1\" target=\"_blank\">#\\1</a>", $processed_text);
       else:
-        $processed_description = preg_replace("/#(\w+)/", "<a href=\"" . skinju_get_tag_link("\\1") . "\">#\\1</a>", $processed_description);
+        $processed_text = preg_replace("/#(\w+)/", "<a href=\"" . skinju_get_tag_link("\\1") . "\">#\\1</a>", $processed_text);
       endif;
     endif;
 
-  $processed_description = preg_replace("#(^|[\n ])([\w]+?://[\w]+[^ \"\n\r\t< ]*)#", "\\1<a href=\"\\2\" target=\"_blank\">\\2</a>", $processed_description);
-  $processed_description = preg_replace("#(^|[\n ])((www|ftp)\.[^ \"\t\n\r< ]*)#", "\\1<a href=\"http://\\2\" target=\"_blank\">\\2</a>", $processed_description);
+  $processed_text = preg_replace("#(^|[\n ])([\w]+?://[\w]+[^ \"\n\r\t< ]*)#", "\\1<a href=\"\\2\" target=\"_blank\">\\2</a>", $processed_text);
+  $processed_text = preg_replace("#(^|[\n ])((www|ftp)\.[^ \"\t\n\r< ]*)#", "\\1<a href=\"http://\\2\" target=\"_blank\">\\2</a>", $processed_text);
 
-    $new_post = array('post_title' => trim (substr (preg_replace("~{$account_parts[0]}: ~i", "", $item->get_title()), 0, 25) . '...'),
-                      'post_content' => trim ($processed_description),
-                      'post_date' => $item->get_date('Y-m-d H:i:s'),
+    $new_post = array('post_title' => trim (substr (preg_replace("~{$account_parts[0]}: ~i", "", $tweet->text), 0, 25) . '...'),
+                      'post_content' => trim ($processed_text),
+					  'post_date' => date( 'Y-m-d H:i:s', strtotime( $tweet->created_at ) ),
+					  'post_date_gmt' => date( 'Y-m-d H:i:s', strtotime( $tweet->created_at ) ),
                       'post_author' => $twitter_account['author'],
                       'post_category' => array($twitter_account['category']),
                       'post_status' => 'publish');
@@ -743,13 +771,9 @@ function tweetimport_import_twitter_feed($twitter_account)
 
     add_post_meta ($new_post_id, 'tweetimport_twitter_author', $twitter_author, true); 
     add_post_meta ($new_post_id, 'tweetimport_date_imported', date ('Y-m-d H:i:s'), true);
-    add_post_meta ($new_post_id, 'tweetimport_twitter_id', $item->get_id(), true);
-    add_post_meta ($new_post_id, 'tweetimport_twitter_id', $item->get_id(), true);
-    add_post_meta ($new_post_id, '_tweetimport_twitter_id_hash', $item->get_id(true), true);
-    add_post_meta ($new_post_id, 'tweetimport_twitter_post_uri', $item->get_link(0));
-    add_post_meta ($new_post_id, 'tweetimport_author_avatar', $item->get_link(0, 'image'));
+    add_post_meta ($new_post_id, 'tweetimport_twitter_id', $tweet->id_str, true);
 
-    preg_match_all ('~#([A-Za-z0-9_]+)(?=\s|\Z)~', $item->get_description(), $out);
+    preg_match_all ('~#([A-Za-z0-9_]+)(?=\s|\Z)~', $tweet->text, $out);
     if ($twitter_account['add_tag']) $out[0][] = $twitter_account['add_tag'];
     wp_set_post_tags($new_post_id, implode (',', $out[0]));
   }
@@ -760,17 +784,16 @@ endif; //tweetimport_import_twitter_feed
 
 if (!has_action ('tweetimport_tweet_before_new_post', 'tweetimport_stop_duplicates')) {add_action('tweetimport_tweet_before_new_post', 'tweetimport_stop_duplicates');}
 if (!function_exists('tweetimport_stop_duplicates')):
-function tweetimport_stop_duplicates($item)
+function tweetimport_stop_duplicates($tweet)
 {
   global $wpdb;
 
   $posts = $wpdb->get_var ($wpdb->prepare ("SELECT COUNT(*) FROM $wpdb->postmeta 
-                                            WHERE meta_key = '_tweetimport_twitter_id_hash'
-                                            AND meta_value = '%s'", $item->get_id(true)));
+                                            WHERE meta_key = 'tweetimport_twitter_id'
+                                            AND meta_value = '%s'", $tweet->id_str));
 
 
   if ($posts > 0)  return false;
-  else return $item;
+  else return $tweet;
 }
 endif; //tweetimport_stop_duplicates
-?>
