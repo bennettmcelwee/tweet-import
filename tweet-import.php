@@ -158,15 +158,12 @@ function tweetimport_import_feeds()
   foreach ($tweetimport_options['twitter_accounts'] as $key=>$account)
   {
     if ($account['active']):
-      $imported_count = tweetimport_import_twitter_feed($account);
-      if (is_numeric ($imported_count)) :
-        $tweetimport_options['twitter_accounts'][$key]['imported_count'] += $imported_count;
-        $tweetimport_options['twitter_accounts'][$key]['last_checked'] = current_time('mysql'); //date ('Y-m-d H:i:s');
-        update_option ('skinju_tweet_import', $tweetimport_options);
-      else :
-        $tweetimport_options['twitter_accounts'][$key]['last_checked'] = $imported_count;
-        update_option ('skinju_tweet_import', $tweetimport_options);        
-      endif;
+      $import_result = tweetimport_import_twitter_feed($account);
+      $tweetimport_options['twitter_accounts'][$key]['imported_count'] += $import_result['count'];
+      $tweetimport_options['twitter_accounts'][$key]['lo_id'] = min_twitter_id($import_result['lo_id'], $tweetimport_options['twitter_accounts'][$key]['lo_id']);
+      $tweetimport_options['twitter_accounts'][$key]['hi_id'] = max_twitter_id($import_result['hi_id'], $tweetimport_options['twitter_accounts'][$key]['hi_id']);
+      $tweetimport_options['twitter_accounts'][$key]['last_checked'] = current_time('mysql'); //date ('Y-m-d H:i:s');
+      update_option ('skinju_tweet_import', $tweetimport_options);
     endif;
   }
 }
@@ -393,7 +390,7 @@ function tweetimport_display_account_list_table()
       echo '</div>';
       echo '</td>';
       echo '<td class="desc">';
-      echo $account['imported_count'] . ' tweets imported<br />';
+      echo ($account['imported_count'] == 0 ? 'No' : $account['imported_count']). ' tweets imported<br />';
       echo 'Last checked on '. $account['last_checked'];
       echo '</td>';
       echo '</tr>';
@@ -594,7 +591,9 @@ function tweetimport_handle_request()
         exit();
         break;
       case 'reset_stats':
-        $tweetimport_options['twitter_accounts'][trim($_GET['account'])]['imported_count']='No';        
+        $tweetimport_options['twitter_accounts'][trim($_GET['account'])]['imported_count']=0;
+        $tweetimport_options['twitter_accounts'][trim($_GET['account'])]['lo_id']='';
+        $tweetimport_options['twitter_accounts'][trim($_GET['account'])]['hi_id']='';
         update_option ('skinju_tweet_import', $tweetimport_options);
         tweetimport_add_message('Account ' . $_GET['account'] . ' stats cleared successfully');
         tweetimport_preserve_messages();
@@ -657,7 +656,9 @@ function tweetimport_handle_request()
         $new_account['hashtags_clickable'] = trim($_POST['hashtags_clickable']); 
         $new_account['hashtags_clickable_twitter'] = trim($_POST['hashtags_clickable_twitter']);
         $new_account['strip_name'] = trim($_POST['strip_name']);
-        $new_account['imported_count'] = 'No'; 
+        $new_account['imported_count'] = 0;
+        $new_account['lo_id'] = '';
+        $new_account['hi_id'] = '';
         $new_account['active'] = true; 
         $new_account['last_checked'] = '(Never)'; 
         $tweetimport_options['twitter_accounts'][$new_account_name] = $new_account;
@@ -729,8 +730,17 @@ function tweetimport_import_twitter_feed($twitter_account)
 	}
 
 	// Import
+	return tweetimport_import_tweets($tweet_list);
+}
+endif; //tweetimport_import_twitter_feed
 
-  $imported_count = 0;
+//-- Import Twitter Feed Functionality
+if (!function_exists('tweetimport_import_tweets')):
+function tweetimport_import_tweets($tweet_list)
+{
+  $count = 0;
+  $lo_id = null;
+  $hi_id = null;
   foreach ($tweet_list as $tweet)
   {
     $tweet = apply_filters ('tweetimport_tweet_before_new_post', $tweet); //return false to stop processing an item.
@@ -773,8 +783,6 @@ function tweetimport_import_twitter_feed($twitter_account)
     if (!$new_post) continue;
     $new_post_id = wp_insert_post($new_post);
 
-    $imported_count++;
-
     add_post_meta ($new_post_id, 'tweetimport_twitter_author', $twitter_author, true); 
     add_post_meta ($new_post_id, 'tweetimport_date_imported', date ('Y-m-d H:i:s'), true);
     add_post_meta ($new_post_id, 'tweetimport_twitter_id', $tweet->id_str, true);
@@ -784,11 +792,15 @@ function tweetimport_import_twitter_feed($twitter_account)
     endif;
     if ($twitter_account['add_tag']) $out[0][] = $twitter_account['add_tag'];
     wp_set_post_tags($new_post_id, implode (',', $out[0]));
+
+    $count++;
+	$lo_id = min_twitter_id($tweet->id_str, $lo_id);
+	$hi_id = max_twitter_id($tweet->id_str, $hi_id);
   }
 
-  return $imported_count;
+  return compact('count', 'lo_id', 'hi_id');
 }
-endif; //tweetimport_import_twitter_feed
+endif; //tweetimport_import_tweets
 
 if (!has_action ('tweetimport_tweet_before_new_post', 'tweetimport_stop_duplicates')) {add_action('tweetimport_tweet_before_new_post', 'tweetimport_stop_duplicates');}
 if (!function_exists('tweetimport_stop_duplicates')):
@@ -805,3 +817,32 @@ function tweetimport_stop_duplicates($tweet)
   else return $tweet;
 }
 endif; //tweetimport_stop_duplicates
+
+
+function max_twitter_id($id1, $id2) {
+	if (is_null($id1)) return $id2;
+	if (is_null($id2)) return $id1;
+	if (strlen($id1) == 0) return $id2;
+	if (strlen($id2) == 0) return $id1;
+	return compare_twitter_id($id1, $id2) < 0 ? $id2 : $id1;
+}
+
+function min_twitter_id($id1, $id2) {
+	if (is_null($id1)) return $id2;
+	if (is_null($id2)) return $id1;
+	if (strlen($id1) == 0) return $id2;
+	if (strlen($id2) == 0) return $id1;
+	return compare_twitter_id($id1, $id2) < 0 ? $id1 : $id2;
+}
+
+function compare_twitter_id($id1, $id2) {
+	// null compares less than non-null
+	if (is_null($id1) && is_null($id2)) return 0;
+	if (is_null($id1)) return 1;
+	if (is_null($id2)) return -1;
+	$len1 = strlen($id1);
+	$len2 = strlen($id2);
+	if ($len1 < $len2) return 1;
+	if ($len2 < $len1) return -1;
+	return strcmp($id1, $id2);
+}
